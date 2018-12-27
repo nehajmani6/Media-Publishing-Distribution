@@ -1,0 +1,108 @@
+<?php
+
+/**
+ * Implements hook_entity_presave().
+ */
+function media_common_entity_presave(Drupal\Core\Entity\EntityInterface $entity){
+  if($entity->bundle() == 'media_news'){
+    $node_content['type'] = $entity->bundle();
+    $node_content['title'] = $entity->get('title')->value;
+    $node_content['body'] = trim(strip_tags($entity->get('body')->value));
+    if($entity->get('field_media_image')->target_id) {
+      $node_content['image_link'] = file_create_url($entity->get('field_media_image')->entity->getFileUri());
+    }
+    $node_content['site_ref'] = $entity->get('field_site_reference')->entity->get('field_site_url')->value;
+
+    $user = 'cauthor';
+    $pass = 'Ca@12345';
+    $post_url = $node_content['site_ref'];
+
+    try {
+      $client = new GuzzleHttp\Client([
+        'base_uri' => $post_url,
+        'timeout'  => 2.0,
+      ]);
+      $res = $client->request('GET', '/rest/session/token');
+      $csrf_token = $res->getBody();
+
+      $serialized_entity = json_encode([
+        'title' => [['value' => $node_content['title']]],
+        'type' => [['target_id' => $node_content['type']]],
+        'body' =>[['value'=>$node_content['body']]],
+        'field_media_image'=>[['uri'=>$node_content['image_link'],'height'=>200,'width'=>200]],
+        '_links' => ['type' => [
+          'href' => $post_url . '/rest/type/node/'.$node_content['type']
+        ]],
+
+      ]);
+      $message = '';
+      if($entity->id()) {
+        $remote_node_id = $entity->get('field_remote_node_id')->value;
+        $response = $client->request('PATCH', '/node/'.$remote_node_id.'?_format=hal_json', [
+          'auth' => [$user, $pass],
+          'body' => $serialized_entity,
+          'headers' => [
+            'Content-Type' => 'application/hal+json',
+            'X-CSRF-Token' => $csrf_token
+          ]
+        ]);
+        if($response->getStatusCode() == 201){
+          $message = "Content successfully updated in $post_url";
+        }
+      }
+      else{
+        $response = $client->request('POST', '/node?_format=hal_json', [
+          'auth' => [$user, $pass],
+          'body' => $serialized_entity,
+          'headers' => [
+            'Content-Type' => 'application/hal+json',
+            'X-CSRF-Token' => $csrf_token
+          ]
+        ]);
+        if($response->getStatusCode() == 201){
+          $message = "Content successfully added in $post_url";
+        }
+        $rem_node = explode('/',$response->getHeaders()['Location'][0]);
+        $rem_node_id = $rem_node[count($rem_node) - 1];
+        $entity->set('field_remote_node_id',$rem_node_id);
+      }
+      $messenger = \Drupal::messenger();
+      $messenger->addMessage($message, $messenger::TYPE_STATUS);
+    }
+    catch (\GuzzleHttp\Exception\RequestException $e){
+      watchdog_exception('media_common', $e->getMessage());
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function media_common_entity_delete(Drupal\Core\Entity\EntityInterface $entity){
+  if($entity->bundle() == 'media_news') {
+    $remote_node_id = $entity->get('field_remote_node_id')->value;
+    $post_url = $entity->get('field_site_reference')->entity->get('field_site_url')->value;
+    $user = 'cauthor';
+    $pass = 'Ca@12345';
+    $message = '';
+
+    $client = new GuzzleHttp\Client([
+      'base_uri' => $post_url,
+      'timeout' => 2.0,
+    ]);
+
+    $res = $client->request('GET', '/rest/session/token');
+    $csrf_token = $res->getBody();
+
+    $response = $client->request('DELETE', '/node/' . $remote_node_id . '?_format=hal_json', [
+      'auth' => [$user, $pass],
+      'headers' => [
+        'Content-Type' => 'application/hal+json',
+        'X-CSRF-Token' => $csrf_token
+      ]
+    ]);
+    $message = "Content successfully deleted in $post_url";
+  }
+  $messenger = \Drupal::messenger();
+  $messenger->addMessage($message, $messenger::TYPE_STATUS);
+}

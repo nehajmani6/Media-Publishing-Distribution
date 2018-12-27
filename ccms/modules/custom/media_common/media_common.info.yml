@@ -1,0 +1,5 @@
+name: 'Media Common'
+type: module
+description: 'Media Common Features'
+core: 8.x
+package: 'Custom'
